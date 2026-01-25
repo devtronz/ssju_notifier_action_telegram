@@ -6,41 +6,44 @@ import os
 URL = "https://www.ssju.ac.in/news-events"
 STATE_FILE = "last_seen.json"
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHAT_ID = os.environ["CHAT_ID"]
 
 def send_telegram(text):
     api = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(api, data={
-      "chat_id": CHAT_ID,
-      "text": text,
-      "disable_web_page_preview": True
-    }, timeout=20)
+    requests.post(
+        api,
+        data={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "disable_web_page_preview": True
+        },
+        timeout=20
+    )
 
-def load_seen():
+def load_state():
     if not os.path.exists(STATE_FILE):
-        return []
+        return {"initialized": False, "seen": []}
     with open(STATE_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except:
-            return []
+        return json.load(f)
 
-def save_seen(data):
+def save_state(state):
     with open(STATE_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(state, f, indent=2)
 
 def check_ssju():
-    first_run = not os.path.exists(STATE_FILE)
-    
-    if first_run:
+    state = load_state()
+
+    # ✅ First-run notification
+    if not state["initialized"]:
         send_telegram("✅ SSJU Notifier started successfully")
-        
+        state["initialized"] = True
+        save_state(state)
+
     r = requests.get(URL, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
     items = soup.select(".view-content .views-row")
-    seen = load_seen()
     new_items = []
 
     for item in items:
@@ -51,18 +54,18 @@ def check_ssju():
         title = a.get_text(strip=True)
         href = a.get("href")
         link = href if href.startswith("http") else "https://www.ssju.ac.in" + href
-        key = title + link
 
-        if key not in seen:
+        key = title + link
+        if key not in state["seen"]:
             new_items.append((title, link))
-            seen.append(key)
+            state["seen"].append(key)
 
     if new_items:
         msg = "🆕 SSJU New Notification(s)\n\n"
         for t, l in new_items:
             msg += f"• {t}\n{l}\n\n"
         send_telegram(msg)
-        save_seen(seen)
+        save_state(state)
 
 if __name__ == "__main__":
     check_ssju()
