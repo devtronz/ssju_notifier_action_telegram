@@ -28,8 +28,25 @@ def load_state():
             "seen_items": [],
             "last_heartbeat": ""
         }
+
     with open(STATE_FILE, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+
+    # 🔄 MIGRATION LOGIC (this fixes your error)
+    if isinstance(data, list):
+        return {
+            "seen_items": data,
+            "last_heartbeat": ""
+        }
+
+    if "seen_items" not in data:
+        data["seen_items"] = []
+
+    if "last_heartbeat" not in data:
+        data["last_heartbeat"] = ""
+
+    return data
+
 
 def save_state(state):
     with open(STATE_FILE, "w") as f:
