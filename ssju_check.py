@@ -2,11 +2,14 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime
 
 # ================= CONFIG =================
 URL = "https://www.ssju.ac.in/news-events"
+
 STATE_FILE = "last_seen.json"
+LOG_FILE = "run_logs.json"
+STATS_FILE = "stats.json"
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
@@ -27,67 +30,134 @@ def send_telegram(text):
     )
 
 
-# ---------- STATE ----------
-def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {
-            "seen_items": [],
-            "last_run": None
-        }
-    with open(STATE_FILE, "r") as f:
+# ---------- FILE HELPERS ----------
+def load_json(path, default):
+    if not os.path.exists(path):
+        return default
+    with open(path, "r") as f:
         return json.load(f)
 
 
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
 
-# ---------- MAIN LOGIC ----------
+# ---------- COMMAND HANDLER ----------
+def handle_commands():
+    """
+    Reads last update and responds to commands like /start, /stats
+    """
+    api = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    r = requests.get(api, timeout=20).json()
+
+    if not r.get("result"):
+        return
+
+    last = r["result"][-1]
+    msg = last.get("message")
+    if not msg:
+        return
+
+    text = msg.get("text", "")
+    chat_id = msg["chat"]["id"]
+
+    if str(chat_id) != str(CHAT_ID):
+        return  # ignore others
+
+    if text == "/start":
+        send_telegram(
+            "✅ *SSJU Notifier Active*\n\n"
+            "Commands:\n"
+            "/stats – notification count\n"
+            "/last – last run info",
+        )
+
+    elif text == "/stats":
+        stats = load_json(STATS_FILE, {"total_notifications": 0})
+        send_telegram(
+            f"📊 *SSJU Stats*\n\n"
+            f"Total notifications sent: {stats['total_notifications']}"
+        )
+
+    elif text == "/last":
+        logs = load_json(LOG_FILE, [])
+        if not logs:
+            send_telegram("ℹ️ No run history yet.")
+        else:
+            last_run = logs[-1]
+            send_telegram(
+                "🕒 *Last Run*\n\n"
+                f"Time: {last_run['time']}\n"
+                f"New items: {last_run['new_items']}\n"
+                f"Status: {last_run['status']}"
+            )
+
+
+# ---------- MAIN CHECK ----------
 def check_ssju():
-    state = load_state()
-    seen = state.get("seen_items", [])
-
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    today = str(date.today())
 
-    # 🔔 HEARTBEAT (only once per day)
-    if state.get("last_run") is None:
-        send_telegram("✅ SSJU Notifier started successfully")
+    state = load_json(STATE_FILE, {"seen_items": [], "last_heartbeat": None})
+    logs = load_json(LOG_FILE, [])
+    stats = load_json(STATS_FILE, {"total_notifications": 0})
 
-    state["last_run"] = now
+    # 💓 heartbeat once per day
+    if state["last_heartbeat"] != today:
+        send_telegram("💓 SSJU notifier is running")
+        state["last_heartbeat"] = today
 
-    r = requests.get(URL, timeout=30)
-    soup = BeautifulSoup(r.text, "html.parser")
+    new_count = 0
+    status = "ok"
 
-    items = soup.select(".view-content .views-row")
-    new_items = []
+    try:
+        r = requests.get(URL, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-    for item in items:
-        a = item.find("a")
-        if not a:
-            continue
+        items = soup.select(".view-content .views-row")
 
-        title = a.get_text(strip=True)
-        href = a.get("href")
+        new_items = []
+        for item in items:
+            a = item.find("a")
+            if not a:
+                continue
 
-        link = href if href.startswith("http") else "https://www.ssju.ac.in" + href
-        key = title + link
+            title = a.get_text(strip=True)
+            href = a.get("href")
+            link = href if href.startswith("http") else "https://www.ssju.ac.in" + href
 
-        if key not in seen:
-            new_items.append((title, link))
-            seen.append(key)
+            key = title + link
+            if key not in state["seen_items"]:
+                new_items.append((title, link))
+                state["seen_items"].append(key)
 
-    if new_items:
-        msg = "🆕 SSJU New Notification(s)\n\n"
-        for t, l in new_items:
-            msg += f"• {t}\n{l}\n\n"
+        if new_items:
+            msg = "🆕 *SSJU New Notification(s)*\n\n"
+            for t, l in new_items:
+                msg += f"• {t}\n{l}\n\n"
 
-        send_telegram(msg)
+            send_telegram(msg)
+            new_count = len(new_items)
+            stats["total_notifications"] += new_count
 
-    state["seen_items"] = seen
-    save_state(state)
+    except Exception as e:
+        status = "error"
+        send_telegram(f"⚠️ SSJU checker error:\n{e}")
+
+    # 📝 log run
+    logs.append({
+        "time": now,
+        "new_items": new_count,
+        "status": status
+    })
+
+    save_json(STATE_FILE, state)
+    save_json(LOG_FILE, logs)
+    save_json(STATS_FILE, stats)
 
 
 # ---------- ENTRY ----------
 if __name__ == "__main__":
+    handle_commands()
     check_ssju()
