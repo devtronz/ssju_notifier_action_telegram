@@ -32,11 +32,15 @@ def fetch_news():
     soup = BeautifulSoup(r.text, "html.parser")
 
     news = []
-    for item in soup.select("div.views-row"):
-        title = item.get_text(strip=True)
-        if title:
-            news.append(title)
-    return news
+
+    for a in soup.select("a"):
+        text = a.get_text(strip=True)
+        href = a.get("href", "")
+
+        if text and "/news" in href.lower():
+            news.append(f"{text}\nhttps://www.ssju.ac.in{href}")
+
+    return list(dict.fromkeys(news))  # remove duplicates
 
 def main():
     old_news = load_state()
