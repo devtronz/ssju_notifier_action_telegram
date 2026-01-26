@@ -1,3 +1,2 @@
-fastapi
-uvicorn
-python-telegram-bot==22.*  # or pyTelegramBotAPI if you prefer simpler
+requests
+beautifulsoup4
